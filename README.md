@@ -1,71 +1,47 @@
-# B2B Chatbot Backend
+# DhandhoAI Backend
 
-A Node.js backend for a B2B conversational agent using Express, MongoDB, and Twilio.
+A Node.js backend for the DhandhoAI B2B conversational agent, using Express, MongoDB, and Pinecone.
 
 ## Prerequisites
 
 - Node.js (v14 or higher)
 - MongoDB (local or Atlas)
-- Twilio Account with WhatsApp Sandbox
+- Pinecone account
 
 ## Setup
 
 1. Install dependencies:
-```bash
-npm install
-```
+   ```bash
+   npm install
+   ```
 
-2. Create a `.env` file in the root directory with the following variables:
-```
-PORT=5000
-MONGODB_URI=mongodb://localhost:27017/b2b-chatbot
-TWILIO_ACCOUNT_SID=your_twilio_account_sid
-TWILIO_AUTH_TOKEN=your_twilio_auth_token
-TWILIO_PHONE_NUMBER=your_twilio_phone_number
-```
+2. Create a `.env` file in the backend root directory with the following variables:
+   ```env
+   PORT=5000
+   MONGO_URI=your_mongodb_connection_string
+   DB_NAME=your_db_name
+   COLLECTION_NAME=your_collection_name
+   PINECONE_API_KEY=your_pinecone_api_key
+   PINECONE_ENVIRONMENT=your_pinecone_environment
+   PINECONE_INDEX=your_pinecone_index
+   ```
 
 3. Start the development server:
-```bash
-npm run dev
-```
+   ```bash
+   npm run dev
+   ```
 
-## API Endpoints
+4. To transfer data from MongoDB to Pinecone:
+   ```bash
+   npm run transfer-to-pinecone
+   ```
 
-### Twilio Webhook
-- **POST** `/api/twilio/webhook`
-  - Handles incoming WhatsApp messages
-  - Requires Twilio webhook configuration
+## Project Structure
 
-### Conversation History
-- **GET** `/api/twilio/conversation/:phoneNumber`
-  - Retrieves conversation history for a specific phone number
-  - Example: `/api/twilio/conversation/+1234567890`
+- `src/models/` - Mongoose models
+- `src/scripts/` - Utility scripts (e.g., MongoDB to Pinecone transfer)
+- `src/index.js` - Main Express server entry point
 
-## Models
-
-### Product
-- name (String)
-- description (String)
-- price (Number)
-- category (String)
-- stock (Number)
-- seller (ObjectId)
-- createdAt (Date)
-
-### Seller
-- name (String)
-- email (String)
-- phone (String)
-- company (String)
-- address (Object)
-- createdAt (Date)
-
-### Conversation
-- phoneNumber (String)
-- messages (Array)
-  - content (String)
-  - sender (String)
-  - timestamp (Date)
-- status (String)
-- lastInteraction (Date)
-- createdAt (Date) 
+## Notes
+- Ensure your MongoDB and Pinecone credentials are correct in the `.env` file.
+- The transfer script will use the MongoDB `_id` as the Pinecone vector ID.
