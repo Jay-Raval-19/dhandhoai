@@ -10,7 +10,7 @@ const pc = new Pinecone({
 const indexName = 'dhandhoai-dataset';
 const namespace = 'ns1';
 const model = 'llama-text-embed-v2';
-const BATCH_SIZE = 96; // Maximum batch size for multilingual-e5-large
+const BATCH_SIZE = 96; // Maximum batch size for llama-text-embed-v2 (verify with Pinecone)
 
 // Enhanced retry logic with exponential backoff
 const retryOperation = async (operation, maxAttempts = 3, baseDelayMs = 1000) => {
@@ -62,7 +62,7 @@ const ensureIndex = async () => {
             await retryOperation(() =>
                 pc.createIndex({
                     name: indexName,
-                    dimension: 1024, // Adjust based on multilingual-e5-large
+                    dimension: 1024, // Verify dimension for llama-text-embed-v2
                     metric: 'cosine',
                     spec: {
                         serverless: {
@@ -81,6 +81,27 @@ const ensureIndex = async () => {
     } catch (error) {
         console.error('Error ensuring index:', error.message);
         throw new Error(`Failed to ensure index: ${error.message}`);
+    }
+};
+
+// Clear namespace to ensure fresh data
+const clearNamespace = async (indexName, namespace) => {
+    try {
+        const index = pc.index(indexName);
+        const stats = await retryOperation(() => index.describeIndexStats());
+        console.log(`Namespace ${namespace} stats:`, JSON.stringify(stats, null, 2));
+
+        if (stats.namespaces && stats.namespaces[namespace] && stats.namespaces[namespace].vectorCount > 0) {
+            console.log(`Clearing namespace ${namespace} with ${stats.namespaces[namespace].vectorCount} vectors...`);
+            // Pinecone doesn't support fetching all IDs directly; use deleteAll for serverless
+            await retryOperation(() => index.namespace(namespace).deleteAll());
+            console.log(`Cleared namespace ${namespace}`);
+        } else {
+            console.log(`Namespace ${namespace} is empty or does not exist. No vectors to clear.`);
+        }
+    } catch (error) {
+        console.warn(`Warning: Failed to clear namespace ${namespace}: ${error.message}. Proceeding with upsert.`);
+        // Continue execution to ensure upsert happens
     }
 };
 
@@ -135,6 +156,9 @@ async function transferMongoToPinecone() {
         // Ensure Pinecone index exists
         await ensureIndex();
 
+        // Clear namespace to avoid stale data
+        await clearNamespace(indexName, namespace);
+
         // Connect to MongoDB
         await mongoose.connect(process.env.MONGO_URI, {
             useNewUrlParser: true,
@@ -148,13 +172,29 @@ async function transferMongoToPinecone() {
         const documents = await collection.find({}).toArray();
         console.log(`Found ${documents.length} documents in MongoDB`);
 
-        // Prepare texts for embedding
+        // Log a sample MongoDB document to inspect fields
+        console.log('Sample MongoDB document:', JSON.stringify(documents[0], null, 2));
+
+        // Log raw document keys
+        console.log('Sample document keys:', Object.keys(documents[0]));
+
+        // Check if document has a text field
+        console.log('Raw text field in sample document:', documents[0].text || 'Not present');
+
+        // Prepare texts for embedding and metadata by stringifying the entire document
         const texts = documents.map(doc => {
-            const docWithStringId = { ...doc, _id: doc._id.toString() };
-            return Object.entries(docWithStringId)
+            // Create a copy without _id to avoid redundancy
+            const docCopy = { ...doc };
+            delete docCopy._id;
+            // Convert to string, removing quotes around keys for readability
+            const textString = Object.entries(docCopy)
                 .map(([key, value]) => `${key}: ${value}`)
-                .join(', ');
+                .join(' ');
+            return textString.trim();
         });
+
+        // Log a sample text to verify stringification
+        console.log('Sample stringified text:', texts[0]);
 
         // Generate embeddings
         console.log('Generating embeddings...');
@@ -162,22 +202,47 @@ async function transferMongoToPinecone() {
         console.log('Embeddings generated successfully');
 
         // Prepare vectors for Pinecone
-        const vectors = documents.map((doc, i) => ({
-            id: doc._id.toString(), // Use _id as Pinecone vector ID
-            values: embeddings[i].values,
-            metadata: {
-                ...doc, // Include all document fields
-                mongo_id: doc._id.toString() // Explicitly include MongoDB _id as mongo_id
-            }
-        }));
+        const vectors = documents.map((doc, i) => {
+            // Create metadata with all document fields
+            const metadata = { ...doc };
 
-        // Log a sample vector to verify metadata
-        console.log('Sample vector metadata:', JSON.stringify(vectors[0].metadata, null, 2));
+            // Remove redundant ID fields, existing text field, and any ID-like fields
+            ['_id', 'ID', 'Id', 'id', 'iD', 'text'].forEach(field => {
+                delete metadata[field];
+            });
+
+            // Explicitly set mongo_id and text
+            metadata.mongo_id = doc._id.toString();
+            metadata.text = texts[i];
+
+            // Log metadata keys and sample metadata
+            console.log('Metadata keys:', Object.keys(metadata));
+            console.log('Sample metadata before upsert:', JSON.stringify(metadata, null, 2));
+
+            return {
+                id: doc._id.toString(), // Use _id as Pinecone vector ID
+                values: embeddings[i].values,
+                metadata
+            };
+        });
+
+        // Log index stats before upsert
+        const index = pc.index(indexName);
+        const statsBefore = await retryOperation(() => index.describeIndexStats());
+        console.log('Index stats before upsert:', JSON.stringify(statsBefore, null, 2));
 
         // Upsert vectors to Pinecone
-        const index = pc.index(indexName);
+        console.log(`Upserting ${vectors.length} vectors to namespace ${namespace}...`);
         await retryOperation(() => index.namespace(namespace).upsert(vectors));
         console.log(`Successfully upserted ${vectors.length} vectors to Pinecone`);
+
+        // Log index stats after upsert
+        const statsAfter = await retryOperation(() => index.describeIndexStats());
+        console.log('Index stats after upsert:', JSON.stringify(statsAfter, null, 2));
+
+        // Fetch a sample vector to verify
+        const sampleVector = await index.namespace(namespace).fetch([vectors[0].id]);
+        console.log('Sample fetched vector:', JSON.stringify(sampleVector, null, 2));
 
     } catch (error) {
         console.error('Error transferring data:', error);
